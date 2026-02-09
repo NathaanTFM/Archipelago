@@ -110,7 +110,7 @@ class WebHostContext(Context):
         if room.last_port:
             self.port = room.last_port
         else:
-            self.port = get_random_port()
+            self.port = 0
 
         multidata = self.decompress(room.seed.multidata)
         game_data_packages = {}
@@ -284,20 +284,29 @@ def run_server_process(name: str, ponyconfig: dict, static_server_data: dict,
                 ctx.load(room_id)
                 ctx.init_save()
                 assert ctx.server is None
-                try:
-                    ctx.server = websockets.serve(
-                        functools.partial(server, ctx=ctx),
-                        ctx.host,
-                        ctx.port,
-                        ssl=get_ssl_context(),
-                        extensions=[server_per_message_deflate_factory],
-                    )
-                    await ctx.server
-                except OSError:  # likely port in use
-                    ctx.server = websockets.serve(
-                        functools.partial(server, ctx=ctx), ctx.host, 0, ssl=get_ssl_context())
 
-                    await ctx.server
+                port_set = list(range(49152, 65536))
+                random.shuffle(port_set)
+                if ctx.port > 0:
+                    port_set.insert(0, ctx.port)  # try ctx.port first, if > 0
+
+                for port_to_try in port_set:
+                    try:
+                        ctx.server = websockets.serve(
+                            functools.partial(server, ctx=ctx),
+                            ctx.host,
+                            port_to_try,
+                            ssl=get_ssl_context(),
+                            extensions=[server_per_message_deflate_factory],
+                        )
+                        await ctx.server
+                        break
+                    except OSError as e:  # likely port in use
+                        print("OSError on websockets.serve", repr(e))
+                        continue
+                else:
+                    raise OSError("failed to bind socket")
+
                 port = 0
                 for wssocket in ctx.server.ws_server.sockets:
                     socketname = wssocket.getsockname()
